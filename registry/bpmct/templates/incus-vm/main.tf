@@ -22,25 +22,21 @@ provider "incus" {}
 data "coder_parameter" "image" {
   name         = "image"
   display_name = "OS Image"
-  description  = "VM image to use from the `images:` remote. ARM64 images only."
-  default      = "ubuntu/24.04"
+  description  = "VM image to use. Runs as amd64 via QEMU on the Pi host."
+  default      = "ubuntu/24.04/amd64"
   icon         = "/icon/image.svg"
   mutable      = false
   option {
     name  = "Ubuntu 24.04 LTS"
-    value = "ubuntu/24.04"
+    value = "ubuntu/24.04/amd64"
   }
   option {
     name  = "Ubuntu 22.04 LTS"
-    value = "ubuntu/22.04"
+    value = "ubuntu/22.04/amd64"
   }
   option {
     name  = "Debian 12"
-    value = "debian/12"
-  }
-  option {
-    name  = "Debian 11"
-    value = "debian/11"
+    value = "debian/12/amd64"
   }
 }
 
@@ -63,7 +59,7 @@ data "coder_parameter" "memory" {
   display_name = "Memory (GB)"
   description  = "Amount of RAM to allocate to the VM in GB."
   type         = "number"
-  default      = "2"
+  default      = "4"
   icon         = "/icon/memory.svg"
   mutable      = true
   validation {
@@ -109,12 +105,12 @@ locals {
 }
 
 # --------------------------------------------------------------------------- #
-# Agent
+# Agent — always amd64 to match the VM
 # --------------------------------------------------------------------------- #
 
 resource "coder_agent" "main" {
   count = data.coder_workspace.me.start_count
-  arch  = data.coder_provisioner.me.arch
+  arch  = "amd64"
   os    = "linux"
   dir   = "/home/${local.workspace_user}"
 
@@ -169,6 +165,12 @@ module "coder-login" {
   agent_id = local.agent_id
 }
 
+module "portabledesktop" {
+  source   = "registry.coder.com/coder/portabledesktop/coder"
+  version  = "~> 0.1"
+  agent_id = local.agent_id
+}
+
 # --------------------------------------------------------------------------- #
 # Storage
 # --------------------------------------------------------------------------- #
@@ -219,6 +221,7 @@ resource "incus_instance" "dev" {
         - git
         - wget
         - vim
+        - unzip
       write_files:
         - path: /opt/coder/init
           permissions: "0755"
@@ -308,7 +311,7 @@ resource "coder_metadata" "info" {
   resource_id = incus_instance.dev.name
   item {
     key   = "type"
-    value = "VM (QEMU/KVM)"
+    value = "VM (QEMU amd64)"
   }
   item {
     key   = "image"
