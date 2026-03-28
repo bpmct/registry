@@ -22,25 +22,25 @@ provider "incus" {}
 data "coder_parameter" "image" {
   name         = "image"
   display_name = "OS Image"
-  description  = "VM image to use. Must be available on the `images:` remote. ARM64 examples: `images:ubuntu/24.04`, `images:debian/12`."
-  default      = "images:ubuntu/24.04"
+  description  = "VM image to use from the `images:` remote. ARM64 images only."
+  default      = "ubuntu/24.04"
   icon         = "/icon/image.svg"
   mutable      = false
   option {
     name  = "Ubuntu 24.04 LTS"
-    value = "images:ubuntu/24.04"
+    value = "ubuntu/24.04"
   }
   option {
     name  = "Ubuntu 22.04 LTS"
-    value = "images:ubuntu/22.04"
+    value = "ubuntu/22.04"
   }
   option {
     name  = "Debian 12"
-    value = "images:debian/12"
+    value = "debian/12"
   }
   option {
     name  = "Debian 11"
-    value = "images:debian/11"
+    value = "debian/11"
   }
 }
 
@@ -87,12 +87,12 @@ data "coder_parameter" "disk_size" {
 }
 
 data "coder_parameter" "git_repo" {
-  type        = "string"
-  name        = "git_repo"
+  type         = "string"
+  name         = "git_repo"
   display_name = "Git Repository"
-  default     = ""
-  description = "(Optional) Clone a Git repo into the home directory on first start."
-  mutable     = true
+  default      = ""
+  description  = "(Optional) Clone a Git repo into the home directory on first start."
+  mutable      = true
 }
 
 # --------------------------------------------------------------------------- #
@@ -170,35 +170,23 @@ module "coder-login" {
 }
 
 # --------------------------------------------------------------------------- #
-# Storage volumes
+# Storage
 # --------------------------------------------------------------------------- #
 
-resource "incus_volume" "home" {
+resource "incus_storage_volume" "home" {
   name = "coder-${data.coder_workspace.me.id}-home"
   pool = local.pool
 }
 
 # --------------------------------------------------------------------------- #
-# VM image
+# Image (cached locally on the host)
 # --------------------------------------------------------------------------- #
 
-resource "incus_cached_image" "image" {
-  source_remote = split(":", data.coder_parameter.image.value)[0]
-  source_image  = split(":", data.coder_parameter.image.value)[1]
-}
-
-# --------------------------------------------------------------------------- #
-# Inject agent token into VM via a file before boot
-# --------------------------------------------------------------------------- #
-
-resource "incus_instance_file" "agent_token" {
-  count              = data.coder_workspace.me.start_count
-  instance           = incus_instance.dev.name
-  content            = <<-EOF
-    CODER_AGENT_TOKEN=${local.agent_token}
-  EOF
-  create_directories = true
-  target_path        = "/opt/coder/init.env"
+resource "incus_image" "image" {
+  source_image = {
+    remote = "images"
+    name   = data.coder_parameter.image.value
+  }
 }
 
 # --------------------------------------------------------------------------- #
@@ -207,14 +195,14 @@ resource "incus_instance_file" "agent_token" {
 
 resource "incus_instance" "dev" {
   name    = local.vm_name
-  image   = incus_cached_image.image.fingerprint
+  image   = incus_image.image.fingerprint
+  type    = "virtual-machine"
   running = data.coder_workspace.me.start_count == 1
-
-  # Boot as a full VM (QEMU/KVM) instead of a container
-  type = "virtual-machine"
 
   config = {
     "boot.autostart" = false
+    "limits.cpu"     = tostring(data.coder_parameter.cpu.value)
+    "limits.memory"  = "${data.coder_parameter.memory.value}GiB"
 
     "cloud-init.user-data" = <<-EOF
       #cloud-config
@@ -236,6 +224,10 @@ resource "incus_instance" "dev" {
           permissions: "0755"
           encoding: b64
           content: ${base64encode(local.agent_init_script)}
+        - path: /opt/coder/init.env
+          permissions: "0600"
+          content: |
+            CODER_AGENT_TOKEN=${local.agent_token}
         - path: /etc/systemd/system/coder-agent.service
           permissions: "0644"
           content: |
@@ -286,18 +278,13 @@ resource "incus_instance" "dev" {
     EOF
   }
 
-  limits = {
-    cpu    = tostring(data.coder_parameter.cpu.value)
-    memory = "${data.coder_parameter.memory.value}GiB"
-  }
-
   device {
     name = "home"
     type = "disk"
     properties = {
       path   = "/home/${local.workspace_user}"
       pool   = local.pool
-      source = incus_volume.home.name
+      source = incus_storage_volume.home.name
     }
   }
 
@@ -325,7 +312,7 @@ resource "coder_metadata" "info" {
   }
   item {
     key   = "image"
-    value = data.coder_parameter.image.value
+    value = "images:${data.coder_parameter.image.value}"
   }
   item {
     key   = "cpu"
@@ -341,6 +328,6 @@ resource "coder_metadata" "info" {
   }
   item {
     key   = "fingerprint"
-    value = substr(incus_cached_image.image.fingerprint, 0, 12)
+    value = substr(incus_image.image.fingerprint, 0, 12)
   }
 }
